@@ -1,5 +1,5 @@
 #-------------------------------------------------------------------------------
-# Name:        nirams_ii_main.py
+# Name:        nirams.py
 # Purpose:     The main script for NIRAMS II.
 #
 # Author:      James Sample
@@ -11,84 +11,87 @@
 """ This is the main or parent script for NIRAMS II.
 """
 
-def main():
-    """ User-specified options and parameters for NIRAMS II. Edit the code 
-        below to set up the model.
+def run_model(param_xls, run_type):
+    """ Run the NIRAMS II model wtht he specified parameters and options.
+    
+    Args:
+        param_xls: Path to complete Excel template for model setup.
+        run_type:  The name of the worksheet to read data from in 'param_xls'.
+                   Either 'single_run' for a single model run with the  
+                   specified parameter set or 'param_combos' for multiple 
+                   model runs.
     """
-    import time
-    
-    # #########################################################################
-    # Get user input
-    # HDF5 path containing inut data
-    hdf5_path = r'C:\Users\user\Documents\JHI\NIRAMS_2015\NIRAMS_Input_Files\nirams_ii_input.h5'
-    
-    # Period of interest (years)
-    st_yr, end_yr = 2001, 2001
-    
-    # Area of interest (co-ordinates should be integer multiples of 5000m)
-    # National = 0, 485000, 520000, 1235000
-    xmin, xmax, ymin, ymax = 0, 485000, 520000, 1235000
-    
-    # Choose the default PET to AET conversion factor grid
-    pet_grid = 'lcms88_pet_fact'
-    
-    # Choose whether to use the iacs_pet_fact grids instead of the one above 
-    # for the years from 2001 to 2010 inclusive
-    use_iacs_pet_fact = True
-    
-    # Choose whether to write output to GeoTiffs as well as to HDF5 (slower, 
-    # but GeoTiffs can be added directly to ArcGIS)
-    write_gtif = True
-    
-    # Run ID. You must assign a unique integer to identify this model run
-    run_id = 1
-    
-    # Output folders
-    hdf5_fold = r'C:\Users\user\Documents\JHI\NIRAMS_2015\NIRAMS_Input_Files'
-    gtiff_fold = r'C:\Users\user\Documents\JHI\NIRAMS_2015\NIRAMS_Input_Files\GeoTiffs'
-    
-    # Physical parameters
-    t_snow = -2             # Threshold temp. for snowfall to begin in degrees
-    t_melt = 1              # Threshold temp. for snow melt to begin in degrees
-    ddf = 10                # Degree-day factor in mm/C/day
-    org_n_fact = 0.2        # Fraction of organic N immediately available for
-                            # leaching
-    calib_min = 0.15        # Parameter controlling mineralistion rate
-    calib_denit = 0.01      # Parameter controlling denitrification rate
-    calib_n_leach = 1.0     # Parameter controlling N leaching rate
-    # #########################################################################
+    import time, input_output as io
     
     st_time = time.time()
-    
-    # Add model params to dict
-    params_dict = {'Input HDF5 path'          : hdf5_path,
-                   'Output HDF5 folder'       : hdf5_fold,
-                   'Write GeoTiffs'           : write_gtif,
-                   'Output GeoTiff folder'    : gtiff_fold,
-                   'Run ID'                   : run_id,
-                   'Start year'               : st_yr,
-                   'End year'                 : end_yr,
-                   'xmin'                     : xmin,
-                   'xmax'                     : xmax,
-                   'ymin'                     : ymin,
-                   'ymax'                     : ymax,
-                   'Default PET to AET grid'  : pet_grid,
-                   'Use IACS'                 : use_iacs_pet_fact,
-                   'T_snow'                   : t_snow,
-                   'T_melt'                   : t_melt,
-                   'Degree-day factor'        : ddf,
-                   'Organic N factor'         : org_n_fact,
-                   'Mineralisation parameter' : calib_min,
-                   'Denitrification parameter': calib_denit,
-                   'N leaching parameter'     : calib_n_leach}
-    
-    # Run model
-    run_nirams_ii(params_dict)
-    
-    end_time = time.time()
-    print 'Finished. Processing time: %.2f minutes.' % ((end_time-st_time)/60)
 
-def run_nirams_ii(params_dict):
+    # Check run_type is valid
+    assert run_type in ('single_run', 'param_combos'), (
+        "The run_type must be either 'single_run' or 'param_combos'.\n"
+        "Please check and try again.")
+             
+    # Read user input from specified sheet
+    user_dict = io.read_user_input(param_xls, run_type)
+        
+    # Determine which version of NIRAMS to run
+    if run_type == 'single_run':
+        print 'Running NIRAMS II for a single parameter set...'   
+
+        # Run single model
+        single_niramsii_run(user_dict)
+    
+    else:
+        # run_type = 'param_combos'
+        import multiprocessing as mp, pandas as pd, os, shutil
+        import input_output as io
+
+        print 'Running NIRAMS II for multiple parameter sets...'  
+
+        # Create temp folder for intermediate output
+        temp_path = os.path.split(user_dict['Output HDF5 path'])[0]
+        temp_fold = os.path.join(temp_path, 'temp')
+        os.makedirs(temp_fold)
+        
+        # Calculate parameter combinations based on user input
+        param_combos = calculate_combinations(user_dict)
+        
+        # Write param combos to CSV
+        df = pd.DataFrame(data=param_combos)
+        df.index = df['Run ID']
+        del df['Run ID']
+        
+        # Re-order columns
+        col_order = ['Number of processors', 'Input HDF5 path', 'Parameter CSV',
+                     'Output HDF5 path', 'Write GeoTiffs', 
+                     'Output GeoTiff folder', 'Start year', 'End year',
+                     'xmin', 'xmax', 'ymin', 'ymax', 'Default PET to AET grid',
+                     'Use IACS', 'T_snow', 'T_melt', 'Degree-day factor',
+                     'Organic N factor', 'Mineralisation parameter',
+                     'Denitrification parameter', 'N leaching parameter']
+        df[col_order].to_csv(user_dict['Parameter CSV'][0], 
+                             index_label='Run ID')
+
+        # Add the temp folder to each param_dict
+        for idx, param_dict in enumerate(param_combos):
+            param_dict['Output HDF5 folder'] = temp_fold
+    
+        # Setup multiprocessing pool
+        pool = mp.Pool(user_dict['Number of processors'][0])
+        
+        # Distribute runs to processors
+        pool.map(single_niramsii_run, param_combos)
+        pool.close()
+    
+        # Merge outputs from each run to single HDF5
+        io.merge_hdf5(temp_fold, user_dict['Output HDF5 path'][0])
+        
+        # Remove temp folder
+        shutil.rmtree(temp_fold)
+        
+    end_time = time.time()
+    print 'Finished. Processing time: %.2f minutes.' % ((end_time-st_time)/60)        
+    
+def single_niramsii_run(params_dict):
     """ Run the NIRAMS II model with the specified parameters.
     
     Args:
@@ -348,5 +351,55 @@ def run_nirams_ii(params_dict):
             io.ma_to_gtiff(params_dict['xmin'], params_dict['ymax'], 1000, 
                            n_leach_path, an_n_leach)
 
-if __name__ == "__main__":
-    main()
+def calculate_combinations(user_dict):
+    """ Read user inut from 'param_combos' sheet in input Excel file and 
+        calculate all combnations of the parameters entered.
+    
+    Args:
+        user_dict: Dict of user-defined input from the 'param_combos' sheet in
+                   the input Excel template.
+                   
+    Returns:
+        List of dicts, where each dict is a valid input for 
+        single_niramsii_run()
+    """
+    import itertools as it
+    
+    # List of params for which multiple parameter values can be entered
+    phys_params = ['T_snow', 'T_melt', 'Degree-day factor', 
+                   'Organic N factor', 'Mineralisation parameter', 
+                   'Denitrification parameter', 'N leaching parameter']
+    
+    # To work with itertools, all dict elements must be in lists. Also need to
+    # Parse any comma separated lists entered for physical params               
+    for key in user_dict.keys():
+        if key in phys_params:
+            if isinstance(user_dict[key], (float, int)):
+                # User has just entered a single value
+                user_dict[key] = [user_dict[key],]
+            else:
+                # User has entered a comma-separated list
+                user_dict[key] = [float(i) for i in 
+                                  user_dict[key].split(',')]
+        else:
+            # Just add the param directly to a list
+            user_dict[key] = [user_dict[key],]
+       
+    # Generate combinations. See
+    # http://stackoverflow.com/questions/3873654/combinations-from-dictionary-with-list-values-using-python
+    # for details
+    param_dicts = sorted(user_dict)
+    param_combos = [dict(zip(param_dicts, prod)) 
+                    for prod in it.product(*(user_dict[param_dict] 
+                    for param_dict in param_dicts))]
+    
+    # Check n_runs < 1000 (because my file naming is padded to 3 digits, so
+    # more than 999 runs won't work. Could be easily extended if necessary)
+    assert len(param_combos) < 1000, ('The maximum numbers of runs for this '
+                                      'code is 999.')
+    
+    # Assign unique run IDs from 1 to n for n param combos
+    for idx, param_dict in enumerate(param_combos):
+        param_dict['Run ID'] = idx + 1
+    
+    return param_combos

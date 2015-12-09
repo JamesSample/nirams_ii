@@ -12,6 +12,71 @@
     GeoTiff formats.
 """
 
+def read_user_input(in_xls, sheet_name):
+    """ Read the NIRAMS II input file.
+    
+    Args:
+        in_xls:     Path to Excel template for NIRAMS II input.
+        sheet_name: Sheet to read in Excel file. Either 'single_run' or
+                    'param_combos'.
+    
+    Returns:
+        Dict of user-specified model settings.
+    """
+    import pandas as pd
+    
+    # Read template
+    df = pd.read_excel(in_xls, sheetname=sheet_name, skiprows=[0,1,2],
+                       index_col=0)
+    
+    # Extract value of interest and convert to dict
+    df = df['Value']
+    param_dict = df.to_dict()    
+    
+    return param_dict
+
+def merge_hdf5(hdf5_fold, out_path):
+    """ Merge output HDF5 files from each run into a single file. All 
+        attributes are also copied across.
+        
+    Args:
+        hdf5_fold: Folder containing individual HDF5 files for each run. This
+                   function will attempt to merge ALL HDF5 files in this 
+                   folder, so make sure it only contains run output.
+        out_path:  Path for merged HDF5 file.
+    
+    Returns:
+        None. The datasets are merged and written to a single file.
+    """
+    import h5py, glob, os
+       
+    # Get a list of files to process
+    search_path = os.path.join(hdf5_fold, '*.h5')
+    file_list = glob.glob(search_path)
+
+    # Open output HDF5
+    out_h5 = h5py.File(out_path, 'w')
+    
+    # Loop over files
+    for h5_path in file_list:
+        # Get the run ID
+        run_id = int(os.path.split(h5_path)[1].split('_')[1][:3])
+        
+        # Open file
+        h5_file = h5py.File(h5_path, 'r')
+        
+        # Copy data
+        h5_file.copy(r'/run_%03d' % run_id, out_h5)
+        
+        # Copy attributes from file to group
+        grp = out_h5[r'/run_%03d' % run_id]
+        for key, val in h5_file.attrs.iteritems():
+            grp.attrs[key] = val 
+    
+        # Tidy up
+        h5_file.close()
+    out_h5.close()
+    
 def create_output_h5(params_dict):
     """ Create an output HDF5 file for a single NIRAMS II run. Store model
         parameter values as file attributes.
